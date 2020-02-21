@@ -1,0 +1,13 @@
+  [Unit]
+  Requires=network.target remote-fs.target
+  After=network.target remote-fs.target
+
+  [Service]
+  Type=simple
+  User=www
+  WorkingDirectory=/opt/webgit
+  ExecStart=/opt/webgit/webgit
+  Restart=on-abnormal
+
+  [Install]
+  WantedBy=multi-user.target
