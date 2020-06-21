@@ -9,7 +9,10 @@ import (
 	"net/http"
 	"os/exec"
 	"strings"
+	"time"
 )
+
+var gitdir string
 
 func readConfig(confName string) map[string]string {
 	m := make(map[string]string)
@@ -29,83 +32,108 @@ func readConfig(confName string) map[string]string {
 	return m
 }
 
+func handlerRoot(w http.ResponseWriter, r *http.Request) {
+	fmt.Fprintf(w, "Hello, this is git utility\nPossible urls:\n/status\n/log\n/pull\n/rollback\n/branch?<branch_name>")
+}
+
+func handlerStatus(w http.ResponseWriter, r *http.Request) {
+	cmd := exec.Command("git", "-C", gitdir, "status")
+	output, err := cmd.Output()
+	//	log.Printf("Output: %s", output)
+	fmt.Fprintf(w, "Done\n, %s", output)
+
+	if err != nil {
+		log.Printf("Command finished with error: %v", err)
+	}
+}
+
+func handlerPull(w http.ResponseWriter, r *http.Request) {
+	cmd := exec.Command("git", "-C", gitdir, "pull")
+	output, err := cmd.Output()
+	fmt.Fprintf(w, "Done\n, %s", output)
+
+	if err != nil {
+		log.Printf("Command finished with error: %v", err)
+	}
+}
+
+func handlerRollback(w http.ResponseWriter, r *http.Request) {
+	cmd := exec.Command("git", "-C", gitdir, "reset", "--hard", "HEAD^")
+	output, err := cmd.Output()
+	fmt.Fprintf(w, "Done\n, %s", output)
+
+	if err != nil {
+		log.Printf("Command finished with error: %v", err)
+	}
+}
+
+func handlerLog(w http.ResponseWriter, r *http.Request) {
+	cmd := exec.Command("git", "-C", gitdir, "log", "--oneline")
+	output, err := cmd.Output()
+	fmt.Fprintf(w, "Done\n, %s", output)
+
+	if err != nil {
+		log.Printf("Command finished with error: %v", err)
+	}
+}
+
+func handlerBranch(w http.ResponseWriter, r *http.Request) {
+	branch := r.URL.RawQuery
+	cmd := exec.Command("git", "-C", gitdir, "checkout", branch)
+	output, err := cmd.Output()
+	fmt.Fprintf(w, "Done, %s", output)
+
+	if err != nil {
+		log.Printf("Command finished with error: %v", err)
+	}
+}
+
 func main() {
 	configMap := readConfig("properties.conf")
 
 	port := configMap["port"]
-	gitdir := configMap["gitdir"]
+	gitdir = configMap["gitdir"]
 	username := configMap["username"]
 	password := configMap["password"]
-	msg := "Please enter your username and password for this site"
+	msg := "Please enter your credentials for this site"
 
-	handlerRoot := func(w http.ResponseWriter, r *http.Request) {
-		fmt.Fprintf(w, "Hello, this is git utility\nPossible urls:\n/status\n/log\n/pull\n/rollback\n/branch?<branch_name>")
-	}
+	siteMux := http.NewServeMux()
+	siteMux.HandleFunc("/", handlerRoot)
+	siteMux.HandleFunc("/status", handlerStatus)
+	siteMux.HandleFunc("/pull", handlerPull)
+	siteMux.HandleFunc("/rollback", handlerRollback)
+	siteMux.HandleFunc("/log", handlerLog)
+	siteMux.HandleFunc("/branch", handlerBranch)
 
-	handlerStatus := func(w http.ResponseWriter, r *http.Request) {
-		cmd := exec.Command("git", "-C", gitdir, "status")
-		output, err := cmd.Output()
-		//	log.Printf("Output: %s", output)
-		fmt.Fprintf(w, "Done\n, %s", output)
-
-		if err != nil {
-			log.Printf("Command finished with error: %v", err)
-		}
-	}
-
-	handlerPull := func(w http.ResponseWriter, r *http.Request) {
-		cmd := exec.Command("git", "-C", gitdir, "pull")
-		output, err := cmd.Output()
-		fmt.Fprintf(w, "Done\n, %s", output)
-
-		if err != nil {
-			log.Printf("Command finished with error: %v", err)
-		}
-	}
-
-	handlerRollback := func(w http.ResponseWriter, r *http.Request) {
-		cmd := exec.Command("git", "-C", gitdir, "reset", "--hard", "HEAD^")
-		output, err := cmd.Output()
-		fmt.Fprintf(w, "Done\n, %s", output)
-
-		if err != nil {
-			log.Printf("Command finished with error: %v", err)
-		}
-	}
-
-	handlerLog := func(w http.ResponseWriter, r *http.Request) {
-		cmd := exec.Command("git", "-C", gitdir, "log", "--oneline")
-		output, err := cmd.Output()
-		fmt.Fprintf(w, "Done\n, %s", output)
-
-		if err != nil {
-			log.Printf("Command finished with error: %v", err)
-		}
-	}
-
-	handlerBranch := func(w http.ResponseWriter, r *http.Request) {
-		branch := r.URL.RawQuery
-		cmd := exec.Command("git", "-C", gitdir, "checkout", branch)
-		output, err := cmd.Output()
-		fmt.Fprintf(w, "Done, %s", output)
-
-		if err != nil {
-			log.Printf("Command finished with error: %v", err)
-		}
-	}
-
-	http.HandleFunc("/", basicAuth(handlerRoot, username, password, msg))
-	http.HandleFunc("/status", basicAuth(handlerStatus, username, password, msg))
-	http.HandleFunc("/pull", basicAuth(handlerPull, username, password, msg))
-	http.HandleFunc("/rollback", basicAuth(handlerRollback, username, password, msg))
-	http.HandleFunc("/log", basicAuth(handlerLog, username, password, msg))
-	http.HandleFunc("/branch", basicAuth(handlerBranch, username, password, msg))
-
-	http.ListenAndServe(port, nil)
+	siteHandler := accessLogMiddleware(siteMux)
+	siteHandler = basicAuth(siteHandler, username, password, msg)
+	siteHandler = errorMiddleware(siteHandler)
+	http.ListenAndServe(port, siteHandler)
 }
 
-func basicAuth(handler http.HandlerFunc, username, password, realm string) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
+func accessLogMiddleware(h http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		start := time.Now()
+		h.ServeHTTP(w, r)
+		fmt.Printf("[%s] %s, %s %s, %s\n",
+			r.Method, r.RemoteAddr, r.URL.Path, time.Since(start), time.Now())
+	})
+}
+
+func errorMiddleware(h http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// var err error
+		defer func() {
+			if err := recover(); err != nil {
+				log.Printf("Recovered from panic: %v", err)
+			}
+		}()
+		h.ServeHTTP(w, r)
+	})
+}
+
+func basicAuth(h http.Handler, username, password, realm string) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 
 		user, pass, ok := r.BasicAuth()
 
@@ -116,6 +144,6 @@ func basicAuth(handler http.HandlerFunc, username, password, realm string) http.
 			return
 		}
 
-		handler(w, r)
-	}
+		h.ServeHTTP(w, r)
+	})
 }
