@@ -1,4 +1,4 @@
-Simple git utility for pulling and rollback repo via web
+Simple git utility for pulling, branching and rollback repo via web
 
 How to install and run:
 
